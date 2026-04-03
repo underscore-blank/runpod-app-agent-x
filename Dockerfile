@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* && apt-get clean -y
 
 # PaddlePaddle GPU + PaddleOCR
-RUN pip install --no-cache-dir paddlepaddle-gpu "paddleocr==2.7.3"
+RUN pip install --no-cache-dir "paddlepaddle-gpu==2.6.1.post1" "paddleocr==2.7.0.3"
 
 # Python dependencies
 COPY requirements.txt .
