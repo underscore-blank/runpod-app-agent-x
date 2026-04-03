@@ -1,30 +1,98 @@
-<h1>Automatic1111 Stable Diffusion web UI</h1>
+# AppAgentX Backend Worker
 
-[![RunPod](https://api.runpod.io/badge/runpod-workers/worker-a1111)](https://www.runpod.io/console/hub/runpod-workers/worker-a1111)
+RunPod Serverless worker for [AppAgentX](https://github.com/Westlake-AGI-Lab/AppAgentX) — handles screen parsing and image feature extraction in a single endpoint.
 
-- Runs [Automatic1111 Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui) and exposes its `txt2img` API endpoint
-- Comes pre-packaged with the [**Deliberate v6**](https://huggingface.co/XpucT/Deliberate) model
+## Services
 
----
+| Service | `"service"` field | Description |
+|---|---|---|
+| OmniParser | `"omni"` | Parses Android screenshots into labeled UI elements |
+| ImageEmbedding | `"embed"` | Extracts feature vectors from images |
 
-## Usage
+Model weights (OmniParser YOLO + Florence2) are baked into the Docker image at build time.
 
-The `input` object accepts any valid parameter for the Automatic1111 `/sdapi/v1/txt2img` endpoint. Refer to the [Automatic1111 API Documentation](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API) for a full list of available parameters (like `seed`, `sampler_name`, `batch_size`, `styles`, `override_settings`, etc.).
+## CI/CD
 
-### Example Request
+Pushing to `main` triggers a GitHub Actions build that pushes the image to:
+```
+ghcr.io/<org>/runpod-app-agent-x:latest
+ghcr.io/<org>/runpod-app-agent-x:<sha>
+```
 
-Here's an example payload to generate an image:
+Required repository secret: `HF_TOKEN` (HuggingFace token to download weights during build).
+
+## Input format
+
+### OmniParser — parse a screenshot
 
 ```json
 {
   "input": {
-    "prompt": "a photograph of an astronaut riding a horse",
-    "negative_prompt": "text, watermark, blurry, low quality",
-    "steps": 25,
-    "cfg_scale": 7,
-    "width": 512,
-    "height": 512,
-    "sampler_name": "DPM++ 2M Karras"
+    "service": "omni",
+    "image": "<base64-encoded PNG>",
+    "box_threshold": 0.05,
+    "iou_threshold": 0.1,
+    "imgsz": 640
   }
 }
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "parsed_content": [{ "ID": 0, "type": "text", "bbox": [...], "content": "..." }],
+  "labeled_image": "<base64-encoded PNG>",
+  "e_time": 1.23
+}
+```
+
+### ImageEmbedding — single image
+
+```json
+{
+  "input": {
+    "service": "embed",
+    "image": "<base64-encoded PNG>",
+    "model_name": "resnet50"
+  }
+}
+```
+
+### ImageEmbedding — batch
+
+```json
+{
+  "input": {
+    "service": "embed",
+    "images": ["<base64>", "<base64>"],
+    "model_name": "resnet50"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "features": [[0.12, 0.34, ...]],
+  "time_taken": 0.45,
+  "shape": [1, 2048],
+  "model_name": "resnet50"
+}
+```
+
+Available models: `resnet50`, `vit_base_patch16_224`, `efficientnet_b0`, `efficientnet_b4`, `swin_base_patch4_window7_224`, `convnext_base`, `eva02_base_patch14_448`.
+
+## Local proxy
+
+AppAgentX calls the backend via standard HTTP. Run the proxy locally to forward those calls to the RunPod endpoint:
+
+```sh
+RUNPOD_API_KEY=xxx ENDPOINT_ID=yyy python AppAgentX/backend/proxy.py
+```
+
+Then in `AppAgentX/config.py`:
+```python
+Omni_URI    = "http://127.0.0.1:8000"
+Feature_URI = "http://127.0.0.1:8001"
 ```

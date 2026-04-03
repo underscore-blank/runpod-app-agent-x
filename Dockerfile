@@ -1,50 +1,68 @@
-# ---------------------------------------------------------------------------- #
-#                         Stage 1: Download the models                         #
-# ---------------------------------------------------------------------------- #
-FROM alpine/git:2.43.0 as download
-
-# NOTE: CivitAI usually requires an API token, so you need to add it in the header
-#       of the wget command if you're using a model from CivitAI.
-RUN apk add --no-cache wget && \
-    wget -q -O /model.safetensors https://huggingface.co/XpucT/Deliberate/resolve/main/Deliberate_v6.safetensors
-
-# ---------------------------------------------------------------------------- #
-#                        Stage 2: Build the final image                        #
-# ---------------------------------------------------------------------------- #
-FROM python:3.10.14-slim as build_final_image
-
-ARG A1111_RELEASE=v1.9.3
+# AppAgentX — RunPod Serverless Worker
+# OmniParser screen parsing + image feature extraction
+FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    PIP_PREFER_BINARY=1 \
-    ROOT=/stable-diffusion-webui \
     PYTHONUNBUFFERED=1
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN apt-get update && \
-    apt install -y \
-    fonts-dejavu-core rsync git jq moreutils aria2 wget libgoogle-perftools-dev libtcmalloc-minimal4 procps libgl1 libglib2.0-0 && \
-    apt-get autoremove -y && rm -rf /var/lib/apt/lists/* && apt-get clean -y
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    wget libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
+    && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* && apt-get clean -y
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git && \
-    cd stable-diffusion-webui && \
-    git reset --hard ${A1111_RELEASE} && \
-    pip install xformers && \
-    pip install -r requirements_versions.txt && \
-    python -c "from launch import prepare_environment; prepare_environment()" --skip-torch-cuda-test
+# PaddlePaddle GPU + PaddleOCR
+RUN pip install --no-cache-dir paddlepaddle-gpu paddleocr
 
-COPY --from=download /model.safetensors /model.safetensors
-
-# install dependencies
+# Python dependencies
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY test_input.json .
+# Download OmniParser weights from HuggingFace
+RUN --mount=type=secret,id=HF_TOKEN \
+    HF_TOKEN_VALUE=$(cat /run/secrets/HF_TOKEN 2>/dev/null || echo "") && \
+    mkdir -p /weights/icon_detect_v1_5 /weights/icon_caption_florence && \
+    echo "Downloading weights..." && \
+    AUTH_HEADER="" && \
+    if [ -n "$HF_TOKEN_VALUE" ]; then \
+        AUTH_HEADER="Authorization: Bearer $HF_TOKEN_VALUE"; \
+    fi && \
+    BASE="https://huggingface.co/microsoft/OmniParser/resolve/main" && \
+    \
+    echo "  [1/4] YOLO detection model..." && \
+    wget -q ${AUTH_HEADER:+--header="$AUTH_HEADER"} \
+        -O /weights/icon_detect_v1_5/best.pt \
+        "$BASE/icon_detect_v1_5/model_v1_5.pt" || exit 1 && \
+    \
+    echo "  [2/4] Florence2 config..." && \
+    wget -q ${AUTH_HEADER:+--header="$AUTH_HEADER"} \
+        -O /weights/icon_caption_florence/config.json \
+        "$BASE/icon_caption_florence/config.json" || exit 1 && \
+    \
+    echo "  [3/4] Florence2 generation config..." && \
+    wget -q ${AUTH_HEADER:+--header="$AUTH_HEADER"} \
+        -O /weights/icon_caption_florence/generation_config.json \
+        "$BASE/icon_caption_florence/generation_config.json" || exit 1 && \
+    \
+    echo "  [4/4] Florence2 model weights (~900MB)..." && \
+    wget -q ${AUTH_HEADER:+--header="$AUTH_HEADER"} \
+        -O /weights/icon_caption_florence/model.safetensors \
+        "$BASE/icon_caption_florence/model.safetensors" || exit 1 && \
+    \
+    echo "Verifying..." && \
+    test -f /weights/icon_detect_v1_5/best.pt || (echo "ERROR: best.pt missing" && exit 1) && \
+    test -f /weights/icon_caption_florence/model.safetensors || (echo "ERROR: model.safetensors missing" && exit 1) && \
+    ls -lh /weights/icon_detect_v1_5/ && \
+    ls -lh /weights/icon_caption_florence/ && \
+    echo "Weights ready."
 
-ADD src .
+# Copy handler and OmniParser utilities
+COPY src/ /src/
 
-RUN chmod +x /start.sh
-CMD /start.sh
+ENV WEIGHTS_DIR=/weights
+ENV PYTHONPATH=/src
+
+RUN chmod +x /src/start.sh
+
+CMD ["/src/start.sh"]
