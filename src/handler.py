@@ -100,7 +100,7 @@ def handle_omni(job_input: dict) -> dict:
             output_bb_format="xyxy",
             goal_filtering=None,
             easyocr_args={"paragraph": False, "text_threshold": 0.5},
-            use_paddleocr=True,
+            use_paddleocr=False,
         )
         text, ocr_bbox = ocr_result
 

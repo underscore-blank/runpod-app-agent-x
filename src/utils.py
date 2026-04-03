@@ -18,15 +18,7 @@ import numpy as np
 # %matplotlib inline
 from matplotlib import pyplot as plt
 import easyocr
-from paddleocr import PaddleOCR
 reader = easyocr.Reader(['en'])
-paddle_ocr = PaddleOCR(
-    lang='en',
-    use_angle_cls=False,
-    use_gpu=False,
-    show_log=False,
-    use_dilation=True,
-    det_db_score_mode='slow')
 import time
 import base64
 
